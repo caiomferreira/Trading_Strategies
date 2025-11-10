@@ -1,0 +1,11 @@
+# --- Credentials / Environment ---
+.env
+.env.*
+*.pem
+*.key
+*.crt
+secrets.json
+config.yaml
+config.yml
+
+temp.py
