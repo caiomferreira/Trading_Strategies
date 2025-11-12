@@ -47,6 +47,9 @@ QUANTILE_EXTREME = 0.01
 QUANTILE_STD = 0.3
 NORMAL_RATIO = norm.ppf(QUANTILE_EXTREME) / norm.ppf(QUANTILE_STD)
 
+
+
+
 # --------------------------------------------------
 # FREQUENCY HANDLING
 # --------------------------------------------------
@@ -308,8 +311,8 @@ def calculate_position_series_given_variable_risk(
 # --------------------------------------------------
 def calculate_perc_returns(position_contracts_held: pd.Series,
                            adjusted_price: pd.Series,
-                           multiplier: pd.Series,
-                           fx_series: float,
+                           multiplier: float,
+                           fx_series: pd.Series,
                            capital_required: pd.Series) -> pd.Series:
     
     
@@ -401,6 +404,7 @@ def calculate_deflated_costs(
     historic_cost_per_contract = cost_per_contract * cost_deflator
 
     return historic_cost_per_contract
+
 
 # --------------------------------------------------
 # STATISTICS
