@@ -3,6 +3,7 @@ import numpy as np
 from enum import Enum
 from scipy.stats import norm
 from copy import copy
+from scipy.interpolate import interp1d
 
 
 from _utils.core_functions import *
@@ -25,8 +26,41 @@ Results may be different from the corresponding spreadsheet as methods may be sl
 
 # SIGNAL CREATION
 
-import pandas as pd
-from copy import copy
+FDM_LIST = {
+    1: 1.0,
+    2: 1.02,
+    3: 1.03,
+    4: 1.23,
+    5: 1.25,
+    6: 1.27,
+    7: 1.29,
+    8: 1.32,
+    9: 1.34,
+    10: 1.35,
+    11: 1.36,
+    12: 1.38,
+    13: 1.39,
+    14: 1.41,
+    15: 1.42,
+    16: 1.44,
+    17: 1.46,
+    18: 1.48,
+    19: 1.50,
+    20: 1.53,
+    21: 1.54,
+    22: 1.55,
+    25: 1.69,
+    30: 1.81,
+    35: 1.93,
+    40: 2.00,
+}
+fdm_x = list(FDM_LIST.keys())
+fdm_y = list(FDM_LIST.values())
+
+f_interp = interp1d(fdm_x, fdm_y, bounds_error=False, fill_value=2)
+
+
+
 
 def calculate_position_dict_with_multiple_carry_forecast_applied(
     adjusted_prices_dict: dict,
@@ -321,3 +355,208 @@ def _month_as_year_frac_from_contract_series(x: pd.Series) -> pd.Series:
 def _month_from_contract_series(x: pd.Series) -> pd.Series:
     """Extract the month component (MM) from a YYYYMM contract code."""
     return x.mod(10000) / 100.0
+
+
+def calculate_position_dict_with_forecast_applied(
+    adjusted_prices_dict: dict,
+    average_position_contracts_dict: dict,
+    std_dev_dict: dict,
+    carry_prices_dict: dict,
+    rule_spec: list,
+) -> dict:
+    """
+    Generate a dictionary of final position time series after applying
+    combined forecasts to each instrument.
+
+    Parameters
+    ----------
+    adjusted_prices_dict : dict[str, pd.Series]
+        Adjusted price series for each instrument.
+    average_position_contracts_dict : dict[str, pd.Series]
+        Baseline positions in contracts for each instrument.
+    std_dev_dict : dict[str, standardDeviation]
+        Annualized volatility estimators per instrument.
+    carry_prices_dict : dict[str, pd.DataFrame]
+        Carry-related price DataFrames per instrument.
+    rule_spec : list[dict]
+        List of rule specifications to compute forecasts (e.g. EWMAC, carry).
+
+    Returns
+    -------
+    dict[str, pd.Series]
+        Mapping from instrument code to final positions with forecasts applied.
+    """
+    list_of_instruments = list(adjusted_prices_dict.keys())
+    position_dict_with_carry = dict(
+        [
+            (
+                instrument_code,
+                calculate_position_with_forecast_applied(
+                    average_position=average_position_contracts_dict[instrument_code],
+                    stdev_ann_perc=std_dev_dict[instrument_code],
+                    carry_price=carry_prices_dict[instrument_code],
+                    adjusted_price=adjusted_prices_dict[instrument_code],
+                    rule_spec=rule_spec,
+                ),
+            )
+            for instrument_code in list_of_instruments
+        ]
+    )
+
+    return position_dict_with_carry
+
+def calculate_position_with_forecast_applied(
+    average_position: pd.Series,
+    stdev_ann_perc: standardDeviation,
+    carry_price: pd.DataFrame,
+    adjusted_price: pd.Series,
+    rule_spec: list,
+) -> pd.Series:
+    """
+    Compute the final position series for a single instrument after combining
+    multiple forecast rules and applying the forecast to the baseline position.
+
+    Parameters
+    ----------
+    average_position : pd.Series
+        Baseline position in contracts.
+    stdev_ann_perc : standardDeviation
+        Annualized volatility estimator.
+    carry_price : pd.DataFrame
+        Carry-related price information for the instrument.
+    adjusted_price : pd.Series
+        Adjusted price series for the instrument.
+    rule_spec : list[dict]
+        Rule definitions to create the combined forecast.
+
+    Returns
+    -------
+    pd.Series
+        Final position series scaled by forecast/10.
+    """
+    forecast = calculate_combined_forecast(
+        adjusted_price=adjusted_price,
+        stdev_ann_perc=stdev_ann_perc,
+        carry_price=carry_price,
+        rule_spec=rule_spec,
+    )
+
+    return forecast * average_position / 10
+
+def calculate_combined_forecast(
+    stdev_ann_perc: standardDeviation,
+    carry_price: pd.DataFrame,
+    adjusted_price: pd.Series,
+    rule_spec: list,
+) -> pd.Series:
+    """
+    Combine multiple forecasting rules into a single forecast by:
+    1. Computing each rule independently.
+    2. Averaging the resulting forecasts equally.
+    3. Scaling using the Forecast Diversification Multiplier (FDM).
+    4. Capping the final forecast to [-20, 20].
+
+    Parameters
+    ----------
+    stdev_ann_perc : standardDeviation
+        Annualized volatility estimator.
+    carry_price : pd.DataFrame
+        Carry-related price information.
+    adjusted_price : pd.Series
+        Adjusted price series.
+    rule_spec : list[dict]
+        List of rule specifications.
+
+    Returns
+    -------
+    pd.Series
+        Combined, scaled and capped forecast series.
+    """
+    all_forecasts_as_list = [
+        calculate_forecast(
+            adjusted_price=adjusted_price,
+            stdev_ann_perc=stdev_ann_perc,
+            carry_price=carry_price,
+            rule=rule,
+        )
+        for rule in rule_spec
+    ]
+
+    all_forecasts_as_df = pd.concat(all_forecasts_as_list, axis=1)
+    average_forecast = all_forecasts_as_df.mean(axis=1)
+
+    rule_count = len(rule_spec)
+    fdm = get_fdm(rule_count)
+    scaled_forecast = average_forecast * fdm
+    capped_forecast = scaled_forecast.clip(-20, 20)
+
+    return capped_forecast
+
+def get_fdm(rule_count):
+    """
+    Retrieve the Forecast Diversification Multiplier (FDM) for a given
+    number of forecasting rules via linear interpolation over known values.
+
+    Parameters
+    ----------
+    rule_count : int
+        Number of forecasting rules combined.
+
+    Returns
+    -------
+    float
+        Interpolated FDM value.
+    """
+    fdm = float(f_interp(rule_count))
+    return fdm
+
+def calculate_forecast(
+    stdev_ann_perc: standardDeviation,
+    carry_price: pd.DataFrame,
+    adjusted_price: pd.Series,
+    rule: dict,
+) -> pd.Series:
+    """
+    Apply a single forecast rule (carry or EWMAC) using its parameters.
+
+    Parameters
+    ----------
+    stdev_ann_perc : standardDeviation
+        Annualized volatility estimator.
+    carry_price : pd.DataFrame
+        Carry-related price information.
+    adjusted_price : pd.Series
+        Adjusted price series.
+    rule : dict
+        Rule definition. Must include:
+        - "function": str → "carry" or "ewmac"
+        - parameters consistent with the chosen function.
+
+    Returns
+    -------
+    pd.Series
+        Forecast series computed for the selected rule.
+
+    Raises
+    ------
+    Exception
+        If the rule function is not recognized.
+    """
+    if rule["function"] == "carry":
+        span = rule["span"]
+        forecast = calculate_forecast_for_carry(
+            stdev_ann_perc=stdev_ann_perc, carry_price=carry_price, span=span
+        )
+
+    elif rule["function"] == "ewmac":
+        fast_span = rule["fast_span"]
+        forecast = calculate_forecast_for_ewmac(
+            adjusted_price=adjusted_price,
+            stdev_ann_perc=stdev_ann_perc,
+            fast_span=fast_span,
+        )
+
+    else:
+        raise Exception("Rule %s not recognised!" % rule["function"])
+
+    return forecast
