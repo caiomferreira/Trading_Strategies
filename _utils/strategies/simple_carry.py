@@ -9,6 +9,8 @@ from scipy.interpolate import interp1d
 from _utils.core_functions import *
 from _utils.portfoliohandcrafiting import *
 from _utils.strategies.trend_simple_filter import *
+from _utils.seasonal_carry import calculate_seasonally_adjusted_carry
+
 
 """
 This is a code based on book:
@@ -240,28 +242,46 @@ def calculate_smoothed_carry(
     stdev_ann_perc,
     carry_price: pd.DataFrame,
     span: int,
+    use_seasonal_carry: bool = False,
+    rolls_per_year: int = None,
 ) -> pd.Series:
     """
-    Smooth the volatility-adjusted carry using an exponential moving average.
-
-    Parameters
-    ----------
-    stdev_ann_perc : standardDeviation
-        Annualized volatility object.
-    carry_price : pd.DataFrame
-        DataFrame containing carry data and contract codes.
-    span : int
-        Exponential smoothing parameter.
-
-    Returns
-    -------
-    pd.Series
-        Smoothed, volatility-adjusted carry series.
+    Smooth the carry (either raw+vol-adjusted or seasonally-adjusted)
+    using an exponential moving average.
     """
+
+    # ==========================
+    # 1) Carry normal (vol-adjusted)
+    # ==========================
     risk_adj_carry = calculate_vol_adjusted_carry(
-        stdev_ann_perc=stdev_ann_perc, carry_price=carry_price
+        stdev_ann_perc=stdev_ann_perc,
+        carry_price=carry_price
     )
+
+    # ==========================
+    # 2) Seasonal adjustment opcional
+    # ==========================
+    if use_seasonal_carry:
+
+        if rolls_per_year is None:
+            raise ValueError("rolls_per_year must be provided when use_seasonal_carry=True")
+
+        # Extrair série original de carry bruto
+        # (Carver assume 'carry' é a primeira coluna do df)
+
+        seasonally_adj_carry = calculate_seasonally_adjusted_carry(
+            original_raw_carry=risk_adj_carry,
+            rolls_per_year=rolls_per_year
+        )
+
+        # **Substitui o carry vol-adjusted pelo seasonal-adjusted**
+        risk_adj_carry = seasonally_adj_carry
+
+    # ==========================
+    # 3) smoothing final
+    # ==========================
     smooth_carry = risk_adj_carry.ewm(span).mean()
+
     return smooth_carry
 
 
