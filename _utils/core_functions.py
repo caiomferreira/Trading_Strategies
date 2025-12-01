@@ -3,6 +3,11 @@ import numpy as np
 from enum import Enum
 from scipy.stats import norm
 from copy import copy
+from scipy.interpolate import interp1d
+
+from dataclasses import dataclass
+import datetime
+
 
 """
 This is a code based on book:
@@ -48,6 +53,44 @@ QUANTILE_STD = 0.3
 NORMAL_RATIO = norm.ppf(QUANTILE_EXTREME) / norm.ppf(QUANTILE_STD)
 
 
+FORECAST_SCALAR = 9.3
+AVG_ABS_FORECAST = 10.0
+
+
+# SIGNAL CREATION
+
+FDM_LIST = {
+    1: 1.0,
+    2: 1.02,
+    3: 1.03,
+    4: 1.23,
+    5: 1.25,
+    6: 1.27,
+    7: 1.29,
+    8: 1.32,
+    9: 1.34,
+    10: 1.35,
+    11: 1.36,
+    12: 1.38,
+    13: 1.39,
+    14: 1.41,
+    15: 1.42,
+    16: 1.44,
+    17: 1.46,
+    18: 1.48,
+    19: 1.50,
+    20: 1.53,
+    21: 1.54,
+    22: 1.55,
+    25: 1.69,
+    30: 1.81,
+    35: 1.93,
+    40: 2.00,
+}
+fdm_x = list(FDM_LIST.keys())
+fdm_y = list(FDM_LIST.values())
+
+f_interp = interp1d(fdm_x, fdm_y, bounds_error=False, fill_value=2)
 
 
 # --------------------------------------------------
@@ -56,6 +99,9 @@ NORMAL_RATIO = norm.ppf(QUANTILE_EXTREME) / norm.ppf(QUANTILE_STD)
 PERIODS_YEAR = {"daily": 252, "weekly": 52, "monthly": 12, "yearly": 1}
 SECONDS_PER_YEAR = 365 * 24 * 60 * 60
 
+
+DATA_START = datetime.datetime(2000,1,1)
+# DATA_START = '2000-01-01'
 
 def periods_per_year(freq: Frequency):
     """
@@ -141,6 +187,28 @@ def demean_remove_zeros(x: pd.Series) -> pd.Series:
     x[x == 0] = np.nan
     return x - x.mean()
 
+
+# --------------------------------------------------
+# AUXILIARY FUNCTIONS
+# --------------------------------------------------
+
+def get_fdm(rule_count):
+    """
+    Retrieve the Forecast Diversification Multiplier (FDM) for a given
+    number of forecasting rules via linear interpolation over known values.
+
+    Parameters
+    ----------
+    rule_count : int
+        Number of forecasting rules combined.
+
+    Returns
+    -------
+    float
+        Interpolated FDM value.
+    """
+    fdm = float(f_interp(rule_count))
+    return fdm
 
 # --------------------------------------------------
 # RISK AND CAPITAL CALCULATIONS
@@ -499,3 +567,579 @@ def create_fx_series_given_adjusted_prices(
     return fx_prices_aligned
 
 
+# =============================
+# CALCULATE POSITIONS WITH FUNCTION APPLIED FORECATS
+
+
+def calculate_position_dict_with_forecast_from_function_applied(
+    adjusted_prices_dict: dict,
+    average_position_contracts_dict: dict,
+    std_dev_dict: dict,
+    carry_prices_dict: dict,
+    list_of_rules: list,
+) -> dict:
+    """
+    Compute position series for all instruments by applying rule-based forecasts.
+
+    Parameters
+    ----------
+    adjusted_prices_dict : dict
+        Mapping {instrument_code: pd.Series} of adjusted prices.
+    average_position_contracts_dict : dict
+        Mapping {instrument_code: pd.Series} of long-run target positions (contracts).
+    std_dev_dict : dict
+        Mapping {instrument_code: standardDeviation} with volatility estimates.
+    carry_prices_dict : dict
+        Mapping {instrument_code: pd.Series} containing carry/roll-yield series.
+    list_of_rules : list
+        List of dictionaries. Each rule must define:
+            - "function": callable that returns a forecast series
+            - "scalar": float multiplier for the rule's output
+            - additional rule arguments passed to the function
+
+    Returns
+    -------
+    dict
+        Mapping {instrument_code: pd.Series} with final contract positions.
+    """
+    list_of_instruments = list(adjusted_prices_dict.keys())
+
+    position_dict_with_carry = dict(
+        [
+            (
+                instrument_code,
+                calculate_position_with_forecast_applied_from_function(
+                    instrument_code,
+                    average_position_contracts_dict=average_position_contracts_dict,
+                    adjusted_prices_dict=adjusted_prices_dict,
+                    std_dev_dict=std_dev_dict,
+                    carry_prices_dict=carry_prices_dict,
+                    list_of_rules=list_of_rules,
+                ),
+            )
+            for instrument_code in list_of_instruments
+        ]
+    )
+
+    return position_dict_with_carry
+
+
+def calculate_position_with_forecast_applied_from_function(
+    instrument_code: str,
+    adjusted_prices_dict: dict,
+    average_position_contracts_dict: dict,
+    std_dev_dict: dict,
+    carry_prices_dict: dict,
+    list_of_rules: list,
+) -> pd.Series:
+    """
+    Compute the final scaled position for a single instrument using
+    rule-defined forecasts.
+
+    Parameters
+    ----------
+    instrument_code : str
+        Identifier for the instrument.
+    adjusted_prices_dict : dict
+        Mapping {instrument_code: pd.Series} of adjusted prices.
+    average_position_contracts_dict : dict
+        Mapping {instrument_code: pd.Series} of long-run target position.
+    std_dev_dict : dict
+        Mapping {instrument_code: standardDeviation}.
+    carry_prices_dict : dict
+        Mapping {instrument_code: pd.Series} with carry/roll-yield data.
+    list_of_rules : list
+        Rules used to compute the combined forecast.
+
+    Returns
+    -------
+    pd.Series
+        Position series = combined_forecast * avg_position / 10.
+    """
+    forecast = calculate_combined_forecast_from_functions(
+        instrument_code=instrument_code,
+        adjusted_prices_dict=adjusted_prices_dict,
+        std_dev_dict=std_dev_dict,
+        carry_prices_dict=carry_prices_dict,
+        list_of_rules=list_of_rules,
+    )
+
+    return forecast * average_position_contracts_dict[instrument_code] / 10
+
+
+def calculate_combined_forecast_from_functions(
+    instrument_code: str,
+    adjusted_prices_dict: dict,
+    std_dev_dict: dict,
+    carry_prices_dict: dict,
+    list_of_rules: list,
+) -> pd.Series:
+    """
+    Combine forecasts from multiple rule functions.
+
+    Procedure:
+        1. Evaluate each rule function.
+        2. Concatenate their forecast series.
+        3. Average across rules.
+        4. Apply Forecast Diversification Multiplier (FDM).
+        5. Clip final forecast to [-20, 20].
+
+    Parameters
+    ----------
+    instrument_code : str
+        Identifier of the instrument.
+    adjusted_prices_dict : dict
+        Dict of price series.
+    std_dev_dict : dict
+        Dict of volatility estimators per instrument.
+    carry_prices_dict : dict
+        Dict of carry/roll-yield series.
+    list_of_rules : list
+        Rules controlling forecast generation.
+
+    Returns
+    -------
+    pd.Series
+        Combined forecast series in standardized Carver-style units.
+    """
+    all_forecasts_as_list = [
+        calculate_forecast_from_function(
+            instrument_code=instrument_code,
+            adjusted_prices_dict=adjusted_prices_dict,
+            std_dev_dict=std_dev_dict,
+            carry_prices_dict=carry_prices_dict,
+            rule=rule,
+        )
+        for rule in list_of_rules
+    ]
+
+    all_forecasts_as_df = pd.concat(all_forecasts_as_list, axis=1)
+    average_forecast = all_forecasts_as_df.mean(axis=1)
+
+    rule_count = len(list_of_rules)
+    fdm = get_fdm(rule_count)
+    scaled_forecast = average_forecast * fdm
+
+    capped_forecast = scaled_forecast.clip(-20, 20)
+    return capped_forecast
+
+
+def calculate_forecast_from_function(
+    instrument_code: str,
+    adjusted_prices_dict: dict,
+    std_dev_dict: dict,
+    carry_prices_dict: dict,
+    rule: dict,
+) -> pd.Series:
+    """
+    Evaluate a single rule function and scale its output.
+
+    Parameters
+    ----------
+    instrument_code : str
+        Instrument identifier.
+    adjusted_prices_dict : dict
+        Dict mapping instrument → adjusted price series.
+    std_dev_dict : dict
+        Dict mapping instrument → volatility estimator.
+    carry_prices_dict : dict
+        Dict mapping instrument → carry series.
+    rule : dict
+        Rule specification. Must contain:
+            - "function": callable
+            - "scalar": float
+            - Any additional arguments
+
+    Returns
+    -------
+    pd.Series
+        Scaled forecast series = function_output * scalar.
+    """
+    rule_copy = copy(rule)
+    rule_function = rule_copy.pop("function")
+    scalar = rule_copy.pop("scalar")
+    rule_args = rule_copy
+
+    forecast_value = rule_function(
+        instrument_code=instrument_code,
+        adjusted_prices_dict=adjusted_prices_dict,
+        std_dev_dict=std_dev_dict,
+        carry_prices_dict=carry_prices_dict,
+        **rule_args
+    )
+
+    return forecast_value * scalar
+
+
+# Buffering positions
+
+def apply_buffering_to_position_dict(
+    position_contracts_dict: dict, average_position_contracts_dict: dict
+) -> dict:
+    """
+    Apply position buffering instrument-by-instrument for a dictionary of Series.
+
+    For each instrument code present in `position_contracts_dict`, this function
+    calls `apply_buffering_to_positions` using the corresponding optimal position
+    series and the average position series from `average_position_contracts_dict`.
+
+    Parameters
+    ----------
+    position_contracts_dict : dict[str, pd.Series]
+        Optimal position in contracts for each instrument (time series).
+        Keys are instrument codes; values are pandas Series indexed by date/time.
+    average_position_contracts_dict : dict[str, pd.Series]
+        Average position in contracts for each instrument (time series), used
+        to size the buffer around the optimal position.
+
+    Returns
+    -------
+    dict[str, pd.Series]
+        Dictionary with the same keys. Each value is a pandas Series with the
+        buffered position over time, indexed like the corresponding optimal
+        position series.
+    """
+    instrument_list = list(position_contracts_dict.keys())
+    buffered_position_dict = dict(
+        [
+            (
+                instrument_code,
+                apply_buffering_to_positions(
+                    position_contracts=position_contracts_dict[instrument_code],
+                    average_position_contracts=average_position_contracts_dict[
+                        instrument_code
+                    ],
+                ),
+            )
+            for instrument_code in instrument_list
+        ]
+    )
+
+    return buffered_position_dict
+
+
+def apply_buffering_to_positions(
+    position_contracts: pd.Series,
+    average_position_contracts: pd.Series,
+    buffer_size: float = 0.05,
+) -> pd.Series:
+    """
+    Construct per-period upper/lower buffers around an optimal position path
+    and apply the buffering rule.
+
+    The buffer at each time t is computed as:
+        buffer_t = abs(average_position_contracts_t) * buffer_size
+    Upper and lower bands are then:
+        upper_t = position_contracts_t + buffer_t
+        lower_t = position_contracts_t - buffer_t
+    The final buffered path is computed by `apply_buffer`.
+
+    Parameters
+    ----------
+    position_contracts : pd.Series
+        Target/optimal position in contracts over time.
+    average_position_contracts : pd.Series
+        Average position in contracts over time, used only to size the buffer.
+    buffer_size : float, default 0.05
+        Fraction of the absolute average position used as the buffer width.
+
+    Returns
+    -------
+    pd.Series
+        Buffered position series with the same index as `position_contracts`.
+    """
+    buffer = average_position_contracts.abs() * buffer_size
+    upper_buffer = position_contracts + buffer
+    lower_buffer = position_contracts - buffer
+
+    buffered_position = apply_buffer(
+        optimal_position=position_contracts,
+        upper_buffer=upper_buffer,
+        lower_buffer=lower_buffer,
+    )
+
+    return buffered_position
+
+
+def apply_buffer(
+    optimal_position: pd.Series, upper_buffer: pd.Series, lower_buffer: pd.Series
+) -> pd.Series:
+    """
+    Apply a no-trade buffer to an optimal position time series.
+
+    The rule is:
+      - Start from the first observed optimal position (NaNs forward-filled).
+        If the first value is NaN, start from 0.0.
+      - For each subsequent period:
+          * If last_position > upper_buffer_t, move to upper_buffer_t.
+          * If last_position < lower_buffer_t, move to lower_buffer_t.
+          * Otherwise, keep last_position unchanged.
+
+    Inputs `upper_buffer` and `lower_buffer` are forward-filled and rounded
+    before use. The output is not rounded.
+
+    Parameters
+    ----------
+    optimal_position : pd.Series
+        Optimal position path over time.
+    upper_buffer : pd.Series
+        Upper band for the buffer at each time.
+    lower_buffer : pd.Series
+        Lower band for the buffer at each time.
+
+    Returns
+    -------
+    pd.Series
+        Buffered position series aligned to `optimal_position.index`.
+    """
+    upper_buffer = upper_buffer.ffill().round()
+    lower_buffer = lower_buffer.ffill().round()
+    use_optimal_position = optimal_position.ffill()
+
+    current_position = use_optimal_position[0]
+    if np.isnan(current_position):
+        current_position = 0.0
+
+    buffered_position_list = [current_position]
+
+    for idx in range(len(optimal_position.index))[1:]:
+        current_position = apply_buffer_single_period(
+            last_position=current_position,
+            top_pos=upper_buffer[idx],
+            bot_pos=lower_buffer[idx],
+        )
+
+        buffered_position_list.append(current_position)
+
+    buffered_position = pd.Series(buffered_position_list, index=optimal_position.index)
+
+    return buffered_position
+
+def apply_buffer_single_period(last_position: int, top_pos: float, bot_pos: float):
+    """
+    One-step buffer update.
+
+    If the last position is above the upper band, clamp to the upper band.
+    If the last position is below the lower band, clamp to the lower band.
+    Otherwise keep the last position unchanged.
+
+    Parameters
+    ----------
+    last_position : int
+        Position carried from the previous period.
+    top_pos : float
+        Upper buffer value for the current period.
+    bot_pos : float
+        Lower buffer value for the current period.
+
+    Returns
+    -------
+    float
+        Updated position for the current period according to the buffer rule.
+    """
+    if last_position > top_pos:
+        return top_pos
+    elif last_position < bot_pos:
+        return bot_pos
+    else:
+        return last_position
+
+
+# ============================
+# CORE FUNCTIONS FOR FAST DIRECTIONAL STRATEGIES
+
+
+FORECAST_SCALAR = 9.3
+AVG_ABS_FORECAST = 10.0
+
+# ======================================================
+#  ORDER STRUCTURES (GENERIC)
+# ======================================================
+
+OrderType = Enum("OrderType", ["LIMIT", "MARKET"])
+
+
+@dataclass
+class Order:
+    """
+    Generic order object used by any trading simulation.
+    """
+    order_type: OrderType
+    qty: int
+    limit_price: float = np.nan
+
+    @property
+    def is_buy(self):
+        return self.qty > 0
+
+    @property
+    def is_sell(self):
+        return self.qty < 0
+
+
+class ListOfOrders(list):
+    """
+    Simple list of Order objects with helper filters.
+    """
+    def __init__(self, list_of_orders):
+        super().__init__(list_of_orders)
+
+    def drop_buy_limits(self):
+        return self.drop_signed_limit_orders(1)
+
+    def drop_sell_limits(self):
+        return self.drop_signed_limit_orders(-1)
+
+    def drop_signed_limit_orders(self, order_sign):
+        return ListOfOrders([
+            order
+            for order in self
+            if true_if_order_is_market_or_order_is_not_of_sign(order, order_sign)
+        ])
+
+
+def true_if_order_is_market_or_order_is_not_of_sign(order, order_sign_to_drop):
+    """
+    Used for filtering buy/sell limit orders.
+    """
+    if order.order_type == OrderType.MARKET:
+        return True
+    return np.sign(order.qty) != order_sign_to_drop
+
+
+# ======================================================
+#  TRADE EXECUTION (GENERIC)
+# ======================================================
+
+@dataclass
+class Trade:
+    qty: int
+    fill_date: datetime.datetime
+    current_price: float = np.nan
+
+    @property
+    def filled(self):
+        return not self.unfilled
+
+    @property
+    def unfilled(self):
+        return self.qty == 0
+
+
+def fill_list_of_orders(list_of_orders, fill_date, current_price, bid_ask_spread):
+    """
+    Execute all orders at the given time. Only one order can be filled.
+    """
+    trades = [
+        fill_order(
+            order,
+            current_price=current_price,
+            fill_date=fill_date,
+            bid_ask_spread=bid_ask_spread,
+        )
+        for order in list_of_orders
+    ]
+
+    trades = [t for t in trades if t.filled]
+
+    if len(trades) == 0:
+        return Trade(qty=0, fill_date=fill_date, current_price=current_price)
+    if len(trades) == 1:
+        return trades[0]
+
+    raise Exception("Impossible for multiple trades to be filled at same time!")
+
+
+def fill_order(order, current_price, fill_date, bid_ask_spread):
+    """
+    Fill any order respecting type and fill rules.
+    """
+    if order.order_type == OrderType.MARKET:
+        return fill_market_order(order, current_price, fill_date, bid_ask_spread)
+    elif order.order_type == OrderType.LIMIT:
+        return fill_limit_order(order, fill_date, current_price)
+    raise Exception("Order type not recognized")
+
+
+def fill_market_order(order, current_price, fill_date, bid_ask_spread):
+    """
+    Market orders execute immediately at price ± spread.
+    """
+    if order.is_buy:
+        exec_price = current_price + bid_ask_spread
+    elif order.is_sell:
+        exec_price = current_price - bid_ask_spread
+    else:
+        return Trade(qty=0, fill_date=fill_date, current_price=current_price)
+
+    return Trade(qty=order.qty, fill_date=fill_date, current_price=exec_price)
+
+
+def fill_limit_order(order, fill_date, current_price):
+    """
+    Limit orders execute only if price crosses the limit.
+    """
+    if order.is_buy and current_price > order.limit_price:
+        return Trade(qty=0, fill_date=fill_date, current_price=current_price)
+
+    if order.is_sell and current_price < order.limit_price:
+        return Trade(qty=0, fill_date=fill_date, current_price=current_price)
+
+    return Trade(
+        qty=order.qty,
+        fill_date=fill_date,
+        current_price=order.limit_price,
+    )
+
+
+# ======================================================
+#  PNL COMPUTATION (GENERIC)
+# ======================================================
+
+def calculate_perc_returns_from_trade_list(
+    list_of_trades,
+    multiplier,
+    capital,
+    fx_series,
+    current_price_series,
+    commission_per_contract,
+    daily_stdev,
+):
+    """
+    Convert a list of executed trades into a percentage return series.
+
+    Parameters
+    ----------
+    list_of_trades : list of Trade
+    multiplier : float
+    capital : float
+    fx_series : pd.Series
+    current_price_series : pd.Series
+    commission_per_contract : float
+    daily_stdev : pd.Series or standardDeviation
+
+    Returns
+    -------
+    pd.Series
+    """
+    
+    
+    # Ajustar essa função para estratégia 26
+    
+    qty_list = [t.qty for t in list_of_trades]
+    date_list = [t.fill_date for t in list_of_trades]
+    price_list = [t.current_price for t in list_of_trades]
+
+    qty_series = pd.Series(qty_list, index=date_list)
+    price_series = pd.Series(price_list, index=date_list)
+    position_series = qty_series.cumsum()
+
+    return calculate_perc_returns_with_costs(
+        position_contracts_held=position_series,
+        adjusted_price=price_series,
+        fx_series=fx_series,
+        capital_required=capital,
+        multiplier=multiplier,
+        cost_per_contract=commission_per_contract,
+        stdev_series=daily_stdev,
+    )
