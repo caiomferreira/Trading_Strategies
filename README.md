@@ -1,22 +1,20 @@
 # Trading_Strategies
 
+Este repositório tem como objetivo documentar, analisar e implementar **estratégias quantitativas de trading** em Python.
+O foco é unir **teoria, evidência empírica e prática**, apresentando desde estratégias clássicas até abordagens quantitativas modernas aplicadas a múltiplas classes de ativos.
 
-Este repositório tem como objetivo documentar, analisar e implementar **estratégias quantitativas de trading** em Python.  
-O foco é unir **teoria, evidência empírica e prática**, apresentando desde estratégias clássicas até abordagens quantitativas modernas aplicadas a múltiplas classes de ativos.  
-
-As ideias aqui apresentadas são baseadas em livros e pesquisas de autores como **Robert Carver**, **Ernie Chan**, **Marcos López de Prado**, entre outros.  
+As ideias aqui apresentadas são baseadas em livros e pesquisas de autores como **Robert Carver**, **Ernie Chan**, **Marcos López de Prado**, entre outros.
 Essas referências estão detalhadas na seção [Referências](#referências).
 
-
-## Sumário <!-- no toc -->
-
+## Sumário
 
 - [Trading\_Strategies](#trading_strategies)
-  - [Sumário ](#sumário-)
+  - [Sumário](#sumário)
 - [O que é uma estratégia de Trading](#o-que-é-uma-estratégia-de-trading)
 - [Indicadores Técnicos:](#indicadores-técnicos)
   - [RSI](#rsi)
   - [MACD](#macd)
+  - [Bandas de Bollinger](#bandas-de-bollinger)
 - [Long\&Short](#longshort)
 - [Referências](#referências)
 - [Tópicos Futuros](#tópicos-futuros)
@@ -33,15 +31,16 @@ Em termos quantitativos, eles funcionam como features derivadas, projetadas para
 
 É importante ressaltar que indicadores não geram valor informacional por si só. Seu poder analítico depende de:
 
-  - Hipóteses explícitas sobre a dinâmica do preço;
-  - Forma de construção (janelas, normalizações, filtros);
-  - Contexto de uso (isolados vs. combinados);
-  - Avaliação empírica rigorosa (backtest).
+- Hipóteses explícitas sobre a dinâmica do preço;
+- Forma de construção (janelas, normalizações, filtros);
+- Contexto de uso (isolados vs. combinados);
+- Avaliação empírica rigorosa (backtest).
 
 Neste repositório, indicadores técnicos são tratados como objetos de estudo quantitativo, e não como regras heurísticas prontas para tomada de decisão.
 Exemplos de Indicadores e testes de estratégias aplicados aqui! [Technical Indicators](technical_indicatos)
 
 ## RSI
+
 O Relative Strength Index (RSI) é um indicador de momentum limitado em intervalo, geralmente entre 0 e 100, projetado para medir a velocidade e a persistência dos movimentos de preço ao longo do tempo.
 
 ![Image](images/RSI_sample.png)
@@ -49,11 +48,20 @@ O Relative Strength Index (RSI) é um indicador de momentum limitado em interval
 Ver análise no arquivo [RSI](technical_indicatos/RSI.ipynb).
 
 ## MACD
+
 O Moving Average Convergence Divergence (MACD) é um indicador de momentum e tendência baseado na diferença entre duas médias móveis exponenciais (EMAs). Ele busca capturar mudanças na direção do movimento ao medir a convergência e divergência entre uma EMA rápida e uma EMA lenta, usando uma linha de sinal (EMA do próprio MACD) para identificar possíveis pontos de inflexão.
 
 ![Image](images/MACD_sample.png)
 
 Ver análise no arquivo [MACD](technical_indicatos/MACD.ipynb).
+
+## Bandas de Bollinger
+
+As Bandas de Bollinger (Bollinger Bands) é um indicador de volatilidade composto por tres linhas: uma banda superior, uma banda inferior e uma média móvel central. As bandas se expandem e contraem com base no desvio padrão dos preços em relação à média, permitindo identificar períodos de maior ou menor volatilidade e possíveis reversões quando o preço toca as bandas extremas.
+
+![Image](images/BB_Bands_sample.png)
+
+Ver análise no arquivo [Bandas de Bollinger](technical_indicatos/BB_bands.ipynb).
 
 # Long&Short
 
@@ -65,9 +73,11 @@ Nesse projeto foi realizado a estratégia de Long&Short por **Cointegração**.
 ![Image](images/Pairs_Trading.png)
 
 # Referências
- - [Advanced Futures Trading Strategies: 30 fully tested strategies for multiple trading styles and time frames](https://a.co/d/hhuEtMJ) - Robert Carver
+
+- [Advanced Futures Trading Strategies: 30 fully tested strategies for multiple trading styles and time frames](https://a.co/d/hhuEtMJ) - Robert Carver
 
 # Tópicos Futuros
+
 Temas que pretendo adicionar.
 
 - Estratégia de Cruzamento de médias.
